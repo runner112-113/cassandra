@@ -1024,6 +1024,10 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         return DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddressAndPort());
     }
 
+    /**
+     * 尝试加入gossip集群。
+     * @throws ConfigurationException
+     */
     private void prepareToJoin() throws ConfigurationException
     {
         if (!joined)
@@ -1046,10 +1050,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
             MessagingService.instance().listen();
 
+            // 给本节点起个名字
             UUID localHostId = SystemKeyspace.getOrInitializeLocalHostId();
 
             if (replacing)
             {
+                // 此处会进行doShadowRound
                 localHostId = prepareForReplacement();
                 appStates.put(ApplicationState.TOKENS, valueFactory.tokens(bootstrapTokens));
 
@@ -1098,6 +1104,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
             logger.info("Starting up server gossip");
             Gossiper.instance.register(this);
+            //启动gossip，定时任务等
             Gossiper.instance.start(SystemKeyspace.incrementAndGetGeneration(), appStates); // needed for node-ring gathering.
             gossipActive = true;
 

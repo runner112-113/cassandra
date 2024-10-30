@@ -24,6 +24,11 @@ import org.apache.cassandra.tracing.Tracing;
 
 import static org.apache.cassandra.db.commitlog.CommitLogSegment.ENTRY_OVERHEAD_SIZE;
 
+/**
+ *"MutationVerbHandler" 是一个在 Cassandra 中处理变更动词（mutation verbs）的组件或功能。在这里，“变更动词”通常指的是用于对数据库中的数据进行修改操作的命令，
+ * 比如 INSERT（插入）、UPDATE（更新）、DELETE（删除）等。
+ * 在 Cassandra 中，使用 CQL（Cassandra 查询语言），可以通过这些变更动词来创建、修改或删除数据库中的记录。
+ */
 public class MutationVerbHandler implements IVerbHandler<Mutation>
 {
     public static final MutationVerbHandler instance = new MutationVerbHandler();

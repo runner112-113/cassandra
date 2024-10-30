@@ -161,6 +161,9 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
 
     /* map where key is the endpoint and value is the state associated with the endpoint.
      * This is made public to be consumed by the GossipInfoTable virtual table */
+    /**
+     * endpointStateMap 保存了当前节点已知的整个群集的状态。键是相应节点的 IP 地址，值是 EndPointState 信息
+     */
     public final ConcurrentMap<InetAddressAndPort, EndpointState> endpointStateMap = new ConcurrentHashMap<>();
 
     /* map where key is endpoint and value is timestamp when this endpoint was removed from
@@ -305,23 +308,33 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
                 taskLock.lock();
 
                 /* Update the local heartbeat counter. */
+                /**
+                 * 更新本节点的心跳版本号.目的在于检查宕机的节点，定时轮询检查
+                 * 最新的心跳，如果检查时时间间隔不合理，就认为该节点宕机了，
+                 * 放入失败队列中，再定时检查是否已经恢复了，可以重新假如集群
+                 *
+                 */
                 endpointStateMap.get(getBroadcastAddressAndPort()).getHeartBeatState().updateHeartBeat();
                 if (logger.isTraceEnabled())
                     logger.trace("My heartbeat is now {}", endpointStateMap.get(FBUtilities.getBroadcastAddressAndPort()).getHeartBeatState().getHeartBeatVersion());
                 final List<GossipDigest> gDigests = new ArrayList<>();
 
+                // 构建摘要列表
                 Gossiper.instance.makeGossipDigest(gDigests);
 
                 if (gDigests.size() > 0)
                 {
+                    // 创建发送的消息
                     GossipDigestSyn digestSynMessage = new GossipDigestSyn(getClusterName(),
                                                                            getPartitionerName(),
                                                                            gDigests);
                     Message<GossipDigestSyn> message = Message.out(GOSSIP_DIGEST_SYN, digestSynMessage);
                     /* Gossip to some random live member */
+                    // 随机向集群中存活的节点发送GossipDigestSyn消息
                     boolean gossipedToSeed = doGossipToLiveMember(message);
 
                     /* Gossip to some unreachable member with some probability to check if he is back up */
+                    // 根据一定的概率向未响应的节点发送消息，检查是否能够正常响应
                     maybeGossipToUnreachableMember(message);
 
                     /* Gossip to a seed if we did not do so above, or we have seen less nodes
@@ -341,8 +354,10 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
 
                        See CASSANDRA-150 for more exposition. */
                     if (!gossipedToSeed || liveEndpoints.size() < seeds.size())
+                        // 如果此前发送消息的节点不包含seed节点或者活着的节点数量小于seed数量，则随机向一个seed节点发送消息
                         maybeGossipToSeed(message);
 
+                    // 状态检查
                     doStatusCheck();
                 }
             }
@@ -1823,6 +1838,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
      */
     public void start(int generationNbr, Map<ApplicationState, VersionedValue> preloadLocalStates)
     {
+        // 构建seeed node
         buildSeedsList();
         /* initialize the heartbeat state for this localEndpoint */
         maybeInitializeLocalState(generationNbr);
@@ -1835,6 +1851,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         if (logger.isTraceEnabled())
             logger.trace("gossip started with generation {}", localState.getHeartBeatState().getGeneration());
 
+        // 启动gossip task 每秒执行一次
         scheduledGossipTask = executor.scheduleWithFixedDelay(new GossipTask(),
                                                               Gossiper.intervalInMillis,
                                                               Gossiper.intervalInMillis,
@@ -1864,9 +1881,13 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
      *
      * @param peers Additional peers to try gossiping with.
      * @return endpoint states gathered during shadow round or empty map
+     *
+     * doShadowRound 是 Cassandra 在节点启动或重启时使用的一种机制，通过快速与种子节点交换状态信息，确保集群中的节点状态一致性，并提升节点加入集群的效率。
+     * 这个机制在 Gossip 协议中起到重要作用，帮助维护集群的健康和稳定。
      */
     public synchronized Map<InetAddressAndPort, EndpointState> doShadowRound(Set<InetAddressAndPort> peers)
     {
+        // 构建seed结点集合
         buildSeedsList();
         // it may be that the local address is the only entry in the seed + peers
         // list in which case, attempting a shadow round is pointless
@@ -1880,6 +1901,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         seedsInShadowRound.clear();
         endpointShadowStateMap.clear();
         // send a completely empty syn
+        // 构造一个空的Syn消息，表明这是一次shadow round
         List<GossipDigest> gDigests = new ArrayList<>();
         GossipDigestSyn digestSynMessage = new GossipDigestSyn(getClusterName(), getPartitionerName(), gDigests);
         Message<GossipDigestSyn> message = Message.out(GOSSIP_DIGEST_SYN, digestSynMessage);
@@ -1891,6 +1913,10 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         {
             while (true)
             {
+                /*
+                 *  第一次以及后面每五秒都会尝试向所有的种子节点发送一次shdow round syn消息，尝试
+                 *  获取所有的节点的信息。如果达到了最大的延迟(默认为30S)或者已经达到了目的就会退出
+                 */
                 if (slept % 5000 == 0)
                 { // CASSANDRA-8072, retry at the beginning and every 5 seconds
                     logger.trace("Sending shadow round GOSSIP DIGEST SYN to seeds {}", seeds);
@@ -1919,6 +1945,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
                     if (!isSeed)
                         throw new RuntimeException("Unable to gossip with any peers");
 
+                    // 结束 shadow round 的标志位
                     inShadowRound = false;
                     break;
                 }
